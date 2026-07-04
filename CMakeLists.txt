@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(karma_lm_c0 C)
+project(karma_lm C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
