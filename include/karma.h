@@ -3,9 +3,9 @@
 
 #include "karma_config.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,15 +23,15 @@ float karma_rng_uniform(KarmaRng *rng, float lo, float hi);
 uint64_t karma_fnv1a64(const uint8_t *data, size_t n);
 
 typedef enum KarmaRiskFlags {
-    KARMA_RISK_NONE      = 0,
-    KARMA_RISK_NUMBER    = 1 << 0,
-    KARMA_RISK_UNIT      = 1 << 1,
-    KARMA_RISK_NEGATION  = 1 << 2,
-    KARMA_RISK_CODE      = 1 << 3,
-    KARMA_RISK_QUOTE     = 1 << 4,
-    KARMA_RISK_DATE      = 1 << 5,
-    KARMA_RISK_EQUATION  = 1 << 6,
-    KARMA_RISK_NAME_HINT = 1 << 7
+    KARMA_RISK_NONE       = 0,
+    KARMA_RISK_NUMBER     = 1u << 0,
+    KARMA_RISK_UNIT       = 1u << 1,
+    KARMA_RISK_NEGATION   = 1u << 2,
+    KARMA_RISK_CODE       = 1u << 3,
+    KARMA_RISK_QUOTE      = 1u << 4,
+    KARMA_RISK_DATE       = 1u << 5,
+    KARMA_RISK_EQUATION   = 1u << 6,
+    KARMA_RISK_NAME_HINT  = 1u << 7
 } KarmaRiskFlags;
 
 typedef struct KarmaExactSpan {
@@ -52,26 +52,67 @@ typedef struct KarmaMemory {
 
 typedef struct KarmaModel {
     float emb[KARMA_VOCAB_SIZE][KARMA_D_MODEL];
-
     float wxh[KARMA_D_MODEL][KARMA_D_MODEL];
     float whh[KARMA_D_MODEL][KARMA_D_MODEL];
     float why[KARMA_D_MODEL][KARMA_VOCAB_SIZE];
-
     float h[KARMA_D_MODEL];
 
     KarmaMemory memory;
 } KarmaModel;
 
 void karma_memory_init(KarmaMemory *mem);
+
 uint32_t karma_risk_classify_span(const uint8_t *text, int len);
-bool karma_memory_store_exact(KarmaMemory *mem, const uint8_t *text, int len, uint32_t risk_flags);
+
+int karma_risk_score(uint32_t risk_flags);
+
+bool karma_memory_store_exact(
+    KarmaMemory *mem,
+    const uint8_t *text,
+    int len,
+    uint32_t risk_flags
+);
+
 void karma_memory_store_semantic(KarmaMemory *mem, const float *vec);
-const KarmaExactSpan *karma_memory_recall_exact(const KarmaMemory *mem, const uint8_t *query, int query_len);
+
+int karma_exact_span_recall_score(
+    const KarmaExactSpan *span,
+    const uint8_t *query,
+    int query_len
+);
+
+const KarmaExactSpan *karma_memory_recall_exact(
+    const KarmaMemory *mem,
+    const uint8_t *query,
+    int query_len
+);
+
+const KarmaExactSpan *karma_memory_recall_exact_scored(
+    const KarmaMemory *mem,
+    const uint8_t *query,
+    int query_len,
+    int *out_score
+);
+
+bool karma_exact_spans_contradict(
+    const KarmaExactSpan *a,
+    const KarmaExactSpan *b
+);
+
+bool karma_memory_has_contradiction(
+    const KarmaMemory *mem,
+    const KarmaExactSpan *span
+);
+
 void karma_memory_print(const KarmaMemory *mem);
 
 void karma_model_init(KarmaModel *model, uint64_t seed);
 void karma_model_reset_state(KarmaModel *model);
-void karma_model_forward_byte(KarmaModel *model, uint8_t token, float logits[KARMA_VOCAB_SIZE]);
+void karma_model_forward_byte(
+    KarmaModel *model,
+    uint8_t token,
+    float logits[KARMA_VOCAB_SIZE]
+);
 void karma_model_absorb_text(KarmaModel *model, const uint8_t *text, int len);
 uint8_t karma_model_predict_next(KarmaModel *model, uint8_t token);
 
