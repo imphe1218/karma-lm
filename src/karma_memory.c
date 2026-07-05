@@ -76,6 +76,63 @@ static bool contains_boundary_word_ci(
     return false;
 }
 
+static bool query_mentions_voltage(const uint8_t *text, int len) {
+    return
+        contains_boundary_word_ci(text, len, "voltage") ||
+        contains_boundary_word_ci(text, len, "volt") ||
+        contains_boundary_word_ci(text, len, "volts") ||
+        contains_boundary_word_ci(text, len, "v");
+}
+
+static bool query_mentions_current(const uint8_t *text, int len) {
+    return
+        contains_boundary_word_ci(text, len, "current") ||
+        contains_boundary_word_ci(text, len, "amp") ||
+        contains_boundary_word_ci(text, len, "amps") ||
+        contains_boundary_word_ci(text, len, "a");
+}
+
+static bool query_mentions_timing(const uint8_t *text, int len) {
+    return
+        contains_boundary_word_ci(text, len, "time") ||
+        contains_boundary_word_ci(text, len, "timing") ||
+        contains_boundary_word_ci(text, len, "delay") ||
+        contains_boundary_word_ci(text, len, "ms") ||
+        contains_boundary_word_ci(text, len, "us") ||
+        contains_boundary_word_ci(text, len, "ns");
+}
+
+static bool span_mentions_voltage_unit(const KarmaExactSpan *span) {
+    if (!span) {
+        return false;
+    }
+
+    return
+        contains_boundary_word_ci(span->text, span->length, "v") ||
+        contains_word_ci(span->text, span->length, "volt");
+}
+
+static bool span_mentions_current_unit(const KarmaExactSpan *span) {
+    if (!span) {
+        return false;
+    }
+
+    return
+        contains_boundary_word_ci(span->text, span->length, "a") ||
+        contains_word_ci(span->text, span->length, "amp");
+}
+
+static bool span_mentions_timing_unit(const KarmaExactSpan *span) {
+    if (!span) {
+        return false;
+    }
+
+    return
+        contains_boundary_word_ci(span->text, span->length, "ms") ||
+        contains_boundary_word_ci(span->text, span->length, "us") ||
+        contains_boundary_word_ci(span->text, span->length, "ns");
+}
+
 void karma_memory_init(KarmaMemory *mem) {
     if (!mem) {
         return;
@@ -129,7 +186,7 @@ uint32_t karma_risk_classify_span(const uint8_t *text, int len) {
     bool has_alpha = false;
     bool has_symbol = false;
     bool has_decimal_point = false;
-    bool quote_open = false;
+    bool quote_seen = false;
 
     if (!text || len <= 0) {
         return risk;
@@ -147,7 +204,7 @@ uint32_t karma_risk_classify_span(const uint8_t *text, int len) {
         }
 
         if (c == '"' || c == '\'') {
-            quote_open = !quote_open;
+            quote_seen = true;
         }
 
         if (
@@ -194,22 +251,39 @@ uint32_t karma_risk_classify_span(const uint8_t *text, int len) {
         risk |= KARMA_RISK_NUMBER;
     }
 
-    if (quote_open || contains_word_ci(text, len, "\"")) {
+    if (quote_seen) {
         risk |= KARMA_RISK_QUOTE;
+    }
+
+    /*
+     * Reason:
+     * GPIO/HIGH/LOW are code-like embedded-control tokens.
+     * The previous classifier missed them because they do not require
+     * braces, semicolons, or C syntax.
+     */
+    if (
+        contains_word_ci(text, len, "gpio") ||
+        contains_boundary_word_ci(text, len, "high") ||
+        contains_boundary_word_ci(text, len, "low") ||
+        contains_boundary_word_ci(text, len, "if") ||
+        contains_boundary_word_ci(text, len, "return") ||
+        contains_boundary_word_ci(text, len, "uint") ||
+        contains_boundary_word_ci(text, len, "int") ||
+        contains_boundary_word_ci(text, len, "float") ||
+        contains_boundary_word_ci(text, len, "double")
+    ) {
+        risk |= KARMA_RISK_CODE;
     }
 
     if (has_digit && has_alpha) {
         if (
-            contains_boundary_word_ci(text, len, "v") ||
-            contains_word_ci(text, len, "volt") ||
-            contains_word_ci(text, len, "amp") ||
+            query_mentions_voltage(text, len) ||
+            query_mentions_current(text, len) ||
+            query_mentions_timing(text, len) ||
             contains_word_ci(text, len, "ohm") ||
             contains_word_ci(text, len, "hz") ||
             contains_word_ci(text, len, "kg") ||
-            contains_word_ci(text, len, "m/s") ||
-            contains_word_ci(text, len, "ms") ||
-            contains_word_ci(text, len, "us") ||
-            contains_word_ci(text, len, "ns")
+            contains_word_ci(text, len, "m/s")
         ) {
             risk |= KARMA_RISK_UNIT;
         }
@@ -408,9 +482,15 @@ static int token_overlap_score(
 
 static int exact_feature_overlap_score(
     const KarmaExactSpan *span,
+    const uint8_t *query,
+    int query_len,
     uint32_t query_risk
 ) {
     int score = 0;
+
+    if (!span || !query || query_len <= 0) {
+        return 0;
+    }
 
     if ((span->risk_flags & KARMA_RISK_NUMBER) &&
         (query_risk & KARMA_RISK_NUMBER)) {
@@ -439,6 +519,52 @@ static int exact_feature_overlap_score(
 
     if ((span->risk_flags & KARMA_RISK_DATE) &&
         (query_risk & KARMA_RISK_DATE)) {
+        score += 6;
+    }
+
+    /*
+     * Reason:
+     * Natural-language queries may say "voltage", while exact memory
+     * stores the engineering unit "V".
+     */
+    if (
+        query_mentions_voltage(query, query_len) &&
+        span_mentions_voltage_unit(span)
+    ) {
+        score += 14;
+    }
+
+    /*
+     * Reason:
+     * Same semantic-symbol bridge for current.
+     */
+    if (
+        query_mentions_current(query, query_len) &&
+        span_mentions_current_unit(span)
+    ) {
+        score += 14;
+    }
+
+    /*
+     * Reason:
+     * Same semantic-symbol bridge for timing.
+     */
+    if (
+        query_mentions_timing(query, query_len) &&
+        span_mentions_timing_unit(span)
+    ) {
+        score += 14;
+    }
+
+    /*
+     * Reason:
+     * Queries asking what to "use" should prefer exact risky instructions
+     * over vague generic memories.
+     */
+    if (
+        contains_boundary_word_ci(query, query_len, "use") &&
+        karma_risk_score(span->risk_flags) >= 3
+    ) {
         score += 6;
     }
 
@@ -472,8 +598,12 @@ int karma_exact_span_recall_score(
         query_len
     );
 
-    score += exact_feature_overlap_score(span, query_risk);
-
+    score += exact_feature_overlap_score(
+    span,
+    query,
+    query_len,
+    query_risk
+);
     score += karma_risk_score(span->risk_flags) / 2;
 
     if (karma_memory_has_contradiction(NULL, span)) {
@@ -604,14 +734,64 @@ bool karma_exact_spans_contradict(
     );
 
     if (a_num && b_num && strcmp(na, nb) != 0) {
-        bool same_unit_context =
-            ((a->risk_flags | b->risk_flags) & KARMA_RISK_UNIT) != 0;
+        bool both_voltage_context =
+            span_mentions_voltage_unit(a) &&
+            span_mentions_voltage_unit(b);
+
+        bool both_current_context =
+            span_mentions_current_unit(a) &&
+            span_mentions_current_unit(b);
+
+        bool both_timing_context =
+            span_mentions_timing_unit(a) &&
+            span_mentions_timing_unit(b);
 
         bool same_action_context =
             contains_word_ci(a->text, a->length, "use") &&
             contains_word_ci(b->text, b->length, "use");
 
-        if (same_unit_context || same_action_context) {
+        /*
+         * Reason:
+         * Numeric disagreement alone is too broad.
+         *
+         * Contradiction:
+         *   Use 3.3 V.
+         *   Use 5 V.
+         *
+         * Not necessarily contradiction:
+         *   The secret voltage is 3.14159 V.
+         *   if (v > 3.3) { alarm = 1; }
+         */
+        if (
+            same_action_context ||
+            (
+                both_voltage_context &&
+                token_overlap_score(
+                    a->text,
+                    a->length,
+                    b->text,
+                    b->length
+                ) >= 4
+            ) ||
+            (
+                both_current_context &&
+                token_overlap_score(
+                    a->text,
+                    a->length,
+                    b->text,
+                    b->length
+                ) >= 4
+            ) ||
+            (
+                both_timing_context &&
+                token_overlap_score(
+                    a->text,
+                    a->length,
+                    b->text,
+                    b->length
+                ) >= 4
+            )
+        ) {
             return true;
         }
     }
