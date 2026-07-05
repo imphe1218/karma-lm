@@ -102,35 +102,122 @@ static bool query_mentions_timing(const uint8_t *text, int len) {
         contains_boundary_word_ci(text, len, "ns");
 }
 
-static bool span_mentions_voltage_unit(const KarmaExactSpan *span) {
-    if (!span) {
+static bool span_has_number_before_unit(
+    const KarmaExactSpan *span,
+    const char *unit
+) {
+    if (!span || !unit) {
         return false;
     }
 
-    return
-        contains_boundary_word_ci(span->text, span->length, "v") ||
-        contains_word_ci(span->text, span->length, "volt");
+    int unit_len = (int)strlen(unit);
+
+    if (unit_len <= 0 || span->length < unit_len) {
+        return false;
+    }
+
+    for (int i = 0; i <= span->length - unit_len; ++i) {
+        int ok = 1;
+
+        for (int j = 0; j < unit_len; ++j) {
+            char a = (char)tolower((unsigned char)span->text[i + j]);
+            char b = (char)tolower((unsigned char)unit[j]);
+
+            if (a != b) {
+                ok = 0;
+                break;
+            }
+        }
+
+        if (!ok) {
+            continue;
+        }
+
+        int left_ok =
+            i == 0 ||
+            !isalnum((unsigned char)span->text[i - 1]);
+
+        int right_ok =
+            i + unit_len >= span->length ||
+            !isalnum((unsigned char)span->text[i + unit_len]);
+
+        if (!left_ok || !right_ok) {
+            continue;
+        }
+
+        /*
+         * Reason:
+         * Require a nearby numeric value before the unit.
+         *
+         * This accepts:
+         *   3.3 V
+         *   20 ms
+         *
+         * This rejects:
+         *   low voltage
+         */
+        int start = i - 1;
+        int saw_digit = 0;
+
+        while (start >= 0 && i - start <= 12) {
+            unsigned char c = span->text[start];
+
+            if (isdigit(c)) {
+                saw_digit = 1;
+                break;
+            }
+
+            if (
+                isalpha(c) &&
+                c != '.' &&
+                c != ' ' &&
+                c != '\t'
+            ) {
+                break;
+            }
+
+            start--;
+        }
+
+        if (saw_digit) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool span_mentions_voltage_unit(const KarmaExactSpan *span) {
+    /*
+     * Reason:
+     * Do not treat the plain word "voltage" as an exact unit.
+     * Exact recall should prefer "3.3 V" over "low voltage".
+     */
+    return span_has_number_before_unit(span, "v");
 }
 
 static bool span_mentions_current_unit(const KarmaExactSpan *span) {
-    if (!span) {
-        return false;
-    }
-
+    /*
+     * Reason:
+     * Current unit bonus should require a numeric electrical-current value,
+     * not merely the word "current".
+     */
     return
-        contains_boundary_word_ci(span->text, span->length, "a") ||
-        contains_word_ci(span->text, span->length, "amp");
+        span_has_number_before_unit(span, "a") ||
+        span_has_number_before_unit(span, "ma") ||
+        span_has_number_before_unit(span, "ua");
 }
 
 static bool span_mentions_timing_unit(const KarmaExactSpan *span) {
-    if (!span) {
-        return false;
-    }
-
+    /*
+     * Reason:
+     * Timing unit bonus should require a numeric time value.
+     */
     return
-        contains_boundary_word_ci(span->text, span->length, "ms") ||
-        contains_boundary_word_ci(span->text, span->length, "us") ||
-        contains_boundary_word_ci(span->text, span->length, "ns");
+        span_has_number_before_unit(span, "ms") ||
+        span_has_number_before_unit(span, "us") ||
+        span_has_number_before_unit(span, "ns") ||
+        span_has_number_before_unit(span, "s");
 }
 
 void karma_memory_init(KarmaMemory *mem) {
@@ -564,6 +651,21 @@ static int exact_feature_overlap_score(
     if (
         contains_boundary_word_ci(query, query_len, "use") &&
         karma_risk_score(span->risk_flags) >= 3
+    ) {
+        score += 6;
+    }
+
+        /*
+     * Reason:
+     * Prefer exact engineering values over vague qualitative statements.
+     *
+     * Example:
+     *   Prefer "Use 3.3 V, not 5 V."
+     *   over   "Use low voltage."
+     */
+    if (
+        (span->risk_flags & KARMA_RISK_NUMBER) &&
+        (span->risk_flags & KARMA_RISK_UNIT)
     ) {
         score += 6;
     }
