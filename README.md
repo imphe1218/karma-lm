@@ -53,28 +53,6 @@ Add a tiny training loop for next-byte prediction:
 ---
 Version: `v0.0.2-pre`
 
-First portable C17 iteration of KARMA-LM:
-
-**Kernel-Augmented Recurrent Memory Architecture with Loss-Managed Memory**
-
-This prototype is intentionally small. It demonstrates:
-
-- byte-level input
-- tiny recurrent backbone
-- semantic memory slots
-- exact episodic memory
-- rule-based compression-risk classifier
-- audit/checksum hashes
-- recall-before-answer behavior
-- scored exact-memory recall
-- contradiction-candidate detection
-
-The neural weights are random in this iteration. Training comes next.
-
-## Core Rule
-
-Compress meaning when safe. Preserve exact form when necessary.
-
 ## What Changed in v0.0.2-pre
 
 `v0.0.2-pre` improves the memory reliability layer before adding training.
@@ -93,10 +71,3 @@ New or improved behavior:
   - code-like spans
   - audit-hash preservation
   - exact recall before answer
-
-## Build
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-./build/karma_demo
